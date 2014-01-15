@@ -1,31 +1,31 @@
-prflr-cpp
-=========
+// PRFLR CPP
 
-PRFLR C++
+#ifndef PRFLP_HPP
+#define PRFLP_HPP
 
-#ifndef PRFLR_HPP
-#define PRFLR_HPP
 /*
  *  HOW TO USE
  *
  * // configure profiler
  * // set  profiler server:port  and  set source for timers
- * PRFLR::init("192.168.1.45-testApp", "yourApiKey");
+ * PRFLP::init("192.168.1.45-testApp", "yourApiKey");
  *
  *
  * //start timer
- * PRFLR::Begin("mongoDB.save");
+ * PRFLP::begin("mongoDB.save");
  *
  * //some code
  * sleep(1);
  *
  * //stop timer
- * PRFLR::End("mongoDB.save");
+ * PRFLP::end("mongoDB.save");
  *
+ * //test: g++ -Wall -DMAIN_H -x c++ prflr.hpp && ./a.out
 */
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <netdb.h>
 #include <sys/socket.h>
 #include <sys/timeb.h> 
@@ -42,23 +42,29 @@ PRFLR C++
 #include <exception>
 #include <sstream>
 
-class PRFLRException : public std::exception
+class PRFLPException : public std::exception
 {
 	std::string reason_;
 	public:
-	PRFLRException(const std::string &reason):reason_(reason)
+	PRFLPException(const std::string &reason):reason_(reason)
 	{
 	}
-	virtual ~PRFLRException() throw()
+	virtual ~PRFLPException() throw()
 	{
 	}
-  virtual const char* what() const throw()
+	virtual const char* what() const throw()
 	{
 		return reason_.c_str();
 	}
 };
 
-struct PRFLRPHP
+#ifdef __linux
+#include <syscall.h>
+#else
+#include <pthread.h>
+#endif
+
+struct PRFLPMisc
 {
 	static std::string uniqid()
 	{
@@ -74,43 +80,55 @@ struct PRFLRPHP
 		ftime(&t);
 		return 1000.*t.millitm + t.time;
 	}
+	static std::string threadid(const char* suffix="")
+	{
+		char ret[20];
+#ifdef __linux
+		pid_t x = (pid_t)syscall(SYS_gettid);
+		snprintf(ret,sizeof(ret),"%d%s",(int)x,suffix);
+#else
+		ulong x = (ulong)pthread_self();
+		snprintf(ret,sizeof(ret),"%lx%s",x,suffix);
+#endif
+		return ret;
+	}
 };
 
-class PRFLRSender
+class PRFLPSender
 {
 	typedef std::string string;
-  std::map<string,double> timers;
-  int delayedSend;
-  sockaddr ip;
+	std::map<string,double> timers;
+	int delayedSend;
+	sockaddr ip;
 	public:
-  int socket;
-  string source;
-  string thread;
-  string apikey;
+	int socket;
+	string source;
+	string thread;
+	string apikey;
 	public:
-	PRFLRSender(const char *server="prflr.org",int port=4000):delayedSend(false),socket(-1)
+	PRFLPSender(const char *server="prflr.org",int port=4000):delayedSend(false),socket(-1)
 	{
 		ip = resolve(server,port);
-		apikey = "PRFLR-CPP";
+		apikey = "PRFLP-CPP";
 	}
 	bool bad()
 	{
 		return ip.sa_family==0;
 	}
-	virtual ~PRFLRSender() 
+	virtual ~PRFLPSender() 
 	{
 		if(socket!=-1) close(socket);
 	}
-  void Begin(const char *timer)
+	void Begin(const string& timer)
 	{
-    timers[timer] = PRFLRPHP::microtime();
-  }
-	bool End(const char *timer,const char *info = "")
+		timers[timer] = PRFLPMisc::microtime();
+	}
+	bool End(const string& timer,const char *info = "")
 	{
 		std::map<string,double>::iterator i = timers.find(timer);
 		if(i==timers.end()) return false;
-    double time = PRFLRPHP::microtime() - i->second;
-    send(timer, time, info);
+		double time = PRFLPMisc::microtime() - i->second;
+		send(timer, time, info);
 		timers.erase(i);
 		return true;
 	}
@@ -127,7 +145,7 @@ class PRFLRSender
 		if(c) ret += '|';
 		return ret;
 	}
-	void send(const char *timer,double time,const char *info = "")
+	void send(const string& timer,double time,const char *info = "")
 	{
 		char ntime[100];
 		snprintf(ntime,sizeof(ntime),"%.3f",time);
@@ -138,14 +156,17 @@ class PRFLRSender
 			+ substr(ntime,16)
 			+ substr(info,32)
 			+ substr(apikey,32,0);
-		if(socket==-1) throw PRFLRException("Socket not exist");
-		//printf("[%s]\n",message.c_str());
+		if(socket==-1) throw PRFLPException("Socket not exist");
+#ifdef MAIN_H
+		printf("[%s]\n",message.c_str());
+#else
 		(void)::sendto(socket,message.c_str(),message.size(),0,&ip,sizeof(ip));
+#endif
 	}
 	static struct sockaddr resolve(const char* host,int port)
 	{
 		sockaddr ret;
-		ret.sa_family = 0;
+		memset(&ret,0,sizeof(ret));
 		if(1==1)
 		{
 			sockaddr_in t;
@@ -169,44 +190,43 @@ class PRFLRSender
 	}
 };
 
-class PRFLR
+class PRFLP
 {
-	static inline PRFLRSender& sender()
+	static inline PRFLPSender& sender()
 	{
-		static PRFLRSender ptrfl_org;
+		static PRFLPSender ptrfl_org;
 		return ptrfl_org;
 	}
 	public:
 	static void init(const char* source,const char* apikey)
 	{
 		if(sender().apikey != apikey)
-      throw PRFLRException("Unknown apikey.");
+			throw PRFLPException("Unknown apikey.");
 		if(sender().bad())
-			throw PRFLRException("Unknown sender.");
+			throw PRFLPException("Unknown sender.");
 		sender().socket = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-		if(sender().socket == SOCKET_ERROR) throw PRFLRException("socket");
+		if(sender().socket == SOCKET_ERROR) throw PRFLPException("socket");
 		///if(!source || strlen(source)==0) ... //source=SERVER_ADDR
 		sender().source = source;
-		sender().thread = PRFLRPHP::uniqid();
+		sender().thread = PRFLPMisc::uniqid();
 	}
-	static inline	void begin(const char* timer)
+	static inline void begin(const char* timer)
 	{
-		sender().Begin(timer);
+		sender().Begin(PRFLPMisc::threadid("-") + timer);
 	}
-	static inline	void end(const char* timer, const char *info="")
+	static inline void end(const char* timer, const char *info="")
 	{
-		sender().End(timer,info);
+		sender().End(PRFLPMisc::threadid("-") + timer,info);
 	}
 };
 
 #ifdef MAIN_H
-//PRFLRSender PRFLR::sender;
 int main()
 {
- 	PRFLR::init("192.168.1.45-testApp", "PRFLR-CPP");
-	PRFLR::begin("mongoDB.save"); //? begin,end upper case
+ 	PRFLP::init("192.168.1.45-testApp", "PRFLP-CPP");
+	PRFLP::begin("mongoDB.save");
 	sleep(1);
-	PRFLR::end("mongoDB.save","main|1s");
+	PRFLP::end("mongoDB.save","main|1s");
 }
 #endif
 
