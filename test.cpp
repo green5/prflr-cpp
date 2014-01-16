@@ -1,9 +1,9 @@
-#define PRFLR_TEST
+// #define PRFLR_TEST
 
 /*
  * linux:
 		g++ -Wall -std=c++0x test.cpp -lpthread -lrt && ./a.out
-	 mingw:
+ * mingw:
 		g++ -Wall -std=c++0x test.cpp -lpthread -lws2_32 && a.exe
 */
 
